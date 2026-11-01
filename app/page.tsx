@@ -1,6 +1,7 @@
+
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Challenge = {
   category: string;
@@ -82,14 +83,17 @@ export default function Home() {
   const [mode, setMode] = useState<Mode>("offroad");
   const [topic, setTopic] = useState("All topics");
   const [challenge, setChallenge] = useState<Challenge | null>(null);
-  const [selectedCard, setSelectedCard] = useState<number | null>(null);
   const [drawnTitles, setDrawnTitles] = useState<string[]>([]);
+  const [isShuffling, setIsShuffling] = useState(false);
+  const [isDrawing, setIsDrawing] = useState(false);
   const [phase, setPhase] = useState<Phase>("draw");
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
+  const shuffleTimeout = useRef<number | null>(null);
+const drawTimeout = useRef<number | null>(null);
   useEffect(() => {
     try {
       const saved = localStorage.getItem("mba-school-settings");
@@ -127,7 +131,6 @@ export default function Home() {
               const audio = new window.AudioContext();
               const oscillator = audio.createOscillator();
               const gain = audio.createGain();
-
               oscillator.type = "sine";
               oscillator.frequency.value = 660;
               gain.gain.value = 0.06;
@@ -144,13 +147,19 @@ export default function Home() {
           setPhase(phase === "research" ? "ready" : "finished");
           return 0;
         }
-
         return current - 1;
       });
     }, 1000);
 
     return () => window.clearInterval(timer);
   }, [phase, settings.muteSoundEffects]);
+
+  useEffect(() => {
+    return () => {
+      if (shuffleTimeout.current) clearTimeout(shuffleTimeout.current);
+      if (drawTimeout.current) clearTimeout(drawTimeout.current);
+    };
+  }, []);
 
   const topics = Array.from(new Set(decks[mode].map((item) => item.category))).sort();
 
@@ -159,53 +168,59 @@ export default function Home() {
       ? decks[mode]
       : decks[mode].filter((item) => item.category === topic);
 
-  function updateMinutes(key: "speechMinutes" | "researchMinutes", amount: number) {
-    setSettings((current) => ({
-      ...current,
-      [key]: Math.max(1, Math.min(60, current[key] + amount)),
-    }));
+  function cancelAnimations() {
+    if (shuffleTimeout.current) clearTimeout(shuffleTimeout.current);
+    if (drawTimeout.current) clearTimeout(drawTimeout.current);
+    shuffleTimeout.current = null;
+    drawTimeout.current = null;
+    setIsShuffling(false);
+    setIsDrawing(false);
   }
 
   function resetChallenge() {
+    cancelAnimations();
     setPhase("draw");
     setSecondsLeft(0);
-    setSelectedCard(null);
     setChallenge(null);
   }
 
   function switchMode(nextMode: Mode) {
+    if (isShuffling || isDrawing) return;
     setMode(nextMode);
     setTopic("All topics");
     setDrawnTitles([]);
     resetChallenge();
   }
 
-  function drawCard(index: number) {
-    if (selectedCard === index && phase === "draw") {
-      setSelectedCard(null);
-      setChallenge(null);
-      return;
-    }
+  function drawCard() {
+    if (isShuffling || isDrawing || filteredDeck.length === 0) return;
 
-    let available = filteredDeck.filter((item) => !drawnTitles.includes(item.title));
+    const available = filteredDeck.filter(
+      (item) => !drawnTitles.includes(item.title)
+    );
 
-    if (available.length === 0) {
-      available = filteredDeck;
-      setDrawnTitles([]);
-    }
+    const drawPool = available.length > 0 ? available : filteredDeck;
+    const next = drawPool[Math.floor(Math.random() * drawPool.length)];
 
-    if (available.length > 1 && challenge) {
-      const withoutCurrent = available.filter((item) => item.title !== challenge.title);
-      if (withoutCurrent.length > 0) available = withoutCurrent;
-    }
-
-    const next = available[Math.floor(Math.random() * available.length)];
-
-    setChallenge(next);
-    setSelectedCard(index);
-    setDrawnTitles((previous) => [...previous, next.title]);
+    setIsShuffling(true);
+    setIsDrawing(false);
+    setChallenge(null);
     setPhase("draw");
     setSecondsLeft(0);
+
+    // Physical-style shuffle animation, followed by a single-card draw.
+    shuffleTimeout.current = window.setTimeout(() => {
+      setIsShuffling(false);
+      setIsDrawing(true);
+
+      drawTimeout.current = window.setTimeout(() => {
+        setChallenge(next);
+        setDrawnTitles((previous) =>
+          available.length === 0 ? [next.title] : [...previous, next.title]
+        );
+        setIsDrawing(false);
+      }, 650);
+    }, 1900);
   }
 
   function startResearch() {
@@ -218,6 +233,13 @@ export default function Home() {
     setPhase("speaking");
   }
 
+  function updateMinutes(key: "speechMinutes" | "researchMinutes", amount: number) {
+    setSettings((current) => ({
+      ...current,
+      [key]: Math.max(1, Math.min(60, current[key] + amount)),
+    }));
+  }
+
   return (
     <main className="min-h-screen bg-[#faf9f6] px-6 py-8 text-[#21483a] sm:px-10 lg:px-16">
       <header className="flex flex-wrap items-start justify-between gap-5">
@@ -227,72 +249,33 @@ export default function Home() {
         </div>
 
         <div className="flex flex-wrap items-center gap-4 text-sm">
-          <a
-            href="https://www.instagram.com/who.is.this.deiva/"
-            target="_blank"
-            rel="noreferrer"
-            className="hover:underline"
-          >
-            Instagram
-          </a>
-          <a
-            href="https://www.linkedin.com/in/deiva-darshini-r-0784a0424/"
-            target="_blank"
-            rel="noreferrer"
-            className="hover:underline"
-          >
-            LinkedIn
-          </a>
+          <a href="https://www.instagram.com/who.is.this.deiva/" target="_blank" rel="noreferrer" className="hover:underline">Instagram</a>
+          <a href="https://www.linkedin.com/in/deiva-darshini-r-0784a0424/" target="_blank" rel="noreferrer" className="hover:underline">LinkedIn</a>
           <span className="hidden text-xs text-[#21483a]/60 xl:inline">Made by R Deiva Darshini</span>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="border border-[#21483a]/30 px-4 py-2 transition hover:bg-[#21483a] hover:text-[#faf9f6]"
-          >
-            ⚙ Settings
-          </button>
+          <button onClick={() => setSettingsOpen(true)} className="border border-[#21483a]/30 px-4 py-2 transition hover:bg-[#21483a] hover:text-[#faf9f6]">⚙ Settings</button>
         </div>
       </header>
 
       <section className="mx-auto mt-10 max-w-3xl">
-        <p className="text-center font-serif text-lg text-[#171717]">
-          Choose a topic. Draw a challenge. Think for yourself.
-        </p>
+        <p className="text-center font-serif text-lg text-[#171717]">Choose a topic. Draw a challenge. Think for yourself.</p>
 
         <div className="mt-7 flex flex-wrap justify-center gap-4">
-          <button
-            onClick={() => switchMode("offroad")}
-            aria-pressed={mode === "offroad"}
-            className={`w-64 px-5 py-5 font-serif text-lg transition ${
-              mode === "offroad"
-                ? "bg-[#21483a] text-[#faf9f6]"
-                : "bg-[#dedddb] hover:bg-[#d2d0cb]"
-            }`}
-          >
+          <button onClick={() => switchMode("offroad")} disabled={isShuffling || isDrawing} aria-pressed={mode === "offroad"} className={`w-64 px-5 py-5 font-serif text-lg transition ${mode === "offroad" ? "bg-[#21483a] text-[#faf9f6]" : "bg-[#dedddb] hover:bg-[#d2d0cb]"}`}>
             Off the road
             <span className="mt-1 block text-sm">Keeping you on your toes.</span>
           </button>
-
-          <button
-            onClick={() => switchMode("research")}
-            aria-pressed={mode === "research"}
-            className={`w-64 px-5 py-5 font-serif text-lg transition ${
-              mode === "research"
-                ? "bg-[#21483a] text-[#faf9f6]"
-                : "bg-[#dedddb] hover:bg-[#d2d0cb]"
-            }`}
-          >
+          <button onClick={() => switchMode("research")} disabled={isShuffling || isDrawing} aria-pressed={mode === "research"} className={`w-64 px-5 py-5 font-serif text-lg transition ${mode === "research" ? "bg-[#21483a] text-[#faf9f6]" : "bg-[#dedddb] hover:bg-[#d2d0cb]"}`}>
             Research
             <span className="mt-1 block text-sm">Take your time.</span>
           </button>
         </div>
 
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <label htmlFor="topic-select" className="text-sm">
-            Choose a topic
-          </label>
+          <label htmlFor="topic-select" className="text-sm">Choose a topic</label>
           <select
             id="topic-select"
             value={topic}
+            disabled={isShuffling || isDrawing}
             onChange={(event) => {
               setTopic(event.target.value);
               setDrawnTitles([]);
@@ -301,78 +284,82 @@ export default function Home() {
             className="min-w-56 border border-[#21483a]/30 bg-transparent px-4 py-2 text-sm outline-none focus:border-[#21483a]"
           >
             <option value="All topics">All topics</option>
-            {topics.map((category) => (
-              <option key={category} value={category}>
-                {category}
-              </option>
-            ))}
+            {topics.map((category) => <option key={category} value={category}>{category}</option>)}
           </select>
         </div>
       </section>
 
-      <section className="mx-auto mt-10 grid max-w-4xl grid-cols-1 gap-5 sm:grid-cols-3">
-        {[0, 1, 2].map((index) => {
-          const isSelected = selectedCard === index && challenge !== null;
+      {/* PHYSICAL-STYLE CARD DECK */}
+      <section className="mx-auto mt-14 max-w-3xl">
+        <div className="flex flex-col items-center">
+          <p className="mb-2 text-xs uppercase tracking-[0.25em] text-[#77776f]">Your challenge deck</p>
+          <h2 className="mb-3 text-center font-serif text-3xl">
+            {isShuffling ? "Shuffling the deck..." : isDrawing ? "Drawing your card..." : challenge ? "Your card is ready" : "Ready to draw?"}
+          </h2>
+          <p className="mb-8 text-center text-sm text-[#77776f]">
+            {challenge ? "Your next business challenge has been drawn." : "Shuffle the deck and discover your next challenge."}
+          </p>
 
-          return (
-            <button
-              key={index}
-              onClick={() => drawCard(index)}
-              aria-label={`Draw challenge card ${index + 1}`}
-              className="group h-64 [perspective:1000px]"
-            >
-              <div
-                className={`relative h-full w-full transition-transform duration-700 [transform-style:preserve-3d] ${
-                  isSelected ? "[transform:rotateY(180deg)]" : ""
-                }`}
-              >
-                <div
-                  className="absolute inset-0 flex items-center justify-center bg-[#21483a] [backface-visibility:hidden]"
-                >
-                  <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[#faf9f6] bg-[#dedddb]">
-                    <span className="h-2 w-2 rounded-full bg-[#faf9f6]" />
-                  </span>
+          <div className={`card-table relative flex h-[310px] w-full max-w-md items-center justify-center ${isShuffling ? "is-shuffling" : ""} ${isDrawing ? "is-drawing" : ""}`}>
+            {!challenge && (
+              <>
+                <div className="deck-half deck-left">
+                  {Array.from({ length: 7 }, (_, index) => (
+                    <div className={`playing-card card-left card-${index + 1}`} key={`left-${index}`}>
+                      <CardBack />
+                    </div>
+                  ))}
                 </div>
+                <div className="deck-half deck-right">
+                  {Array.from({ length: 7 }, (_, index) => (
+                    <div className={`playing-card card-right card-${index + 1}`} key={`right-${index}`}>
+                      <CardBack />
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
 
-                <div
-                  className="absolute inset-0 flex flex-col items-center justify-center overflow-y-auto bg-[#21483a] px-6 py-6 text-center text-[#faf9f6] [backface-visibility:hidden] [transform:rotateY(180deg)]"
-                >
-                  {isSelected && challenge && (
-                    <>
-                      <p className="mb-4 text-xs uppercase tracking-[0.2em] text-[#d8d5ca]">
-                        {challenge.category}
-                      </p>
-                      <h2 className="mb-4 font-serif text-2xl">{challenge.title}</h2>
-                      <p className="text-sm leading-7">{challenge.description}</p>
-                      <p className="mt-5 text-xs text-[#d8d5ca]">Your challenge is ready below</p>
-                    </>
-                  )}
+            {challenge && (
+              <div className="drawn-card">
+                <div className="drawn-card-inner">
+                  <div className="drawn-card-front">
+                    <p className="mb-4 text-xs uppercase tracking-[0.2em] text-[#d8d5ca]">{challenge.category}</p>
+                    <h3 className="font-serif text-2xl">{challenge.title}</h3>
+                    <p className="mt-5 text-xs tracking-[0.15em] text-[#d8d5ca]">YOUR CHALLENGE</p>
+                  </div>
                 </div>
               </div>
-            </button>
-          );
-        })}
+            )}
+          </div>
+
+          <button
+            onClick={drawCard}
+            disabled={isShuffling || isDrawing}
+            className="mt-7 min-w-52 bg-[#21483a] px-8 py-4 text-sm tracking-wide text-[#faf9f6] transition hover:bg-[#2b5948] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isShuffling ? "SHUFFLING..." : isDrawing ? "DRAWING..." : challenge ? "DRAW ANOTHER CARD" : "SHUFFLE & DRAW"}
+          </button>
+
+          <p className="mt-3 text-xs text-[#77776f]">
+            {Math.max(0, filteredDeck.length - drawnTitles.length)} challenges remaining in this deck
+          </p>
+        </div>
       </section>
 
-      {challenge && selectedCard !== null && (
+      {/* CHALLENGE AND TIMERS */}
+      {challenge && (
         <section className="mx-auto mt-8 max-w-[850px] border-t border-[#21483a]/20 pt-7">
           {phase === "draw" && (
             <div className="grid gap-6 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-8">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-[#77776f]">Your challenge</p>
                 <h2 className="mt-2 font-serif text-2xl">{challenge.title}</h2>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-[#343a35]">
-                  {challenge.description}
-                </p>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-[#343a35]">{challenge.description}</p>
               </div>
-              <button
-                onClick={startResearch}
-                className="bg-[#21483a] px-6 py-4 text-sm text-[#faf9f6] transition hover:bg-[#2b5948]"
-              >
+              <button onClick={startResearch} className="bg-[#21483a] px-6 py-4 text-sm text-[#faf9f6] transition hover:bg-[#2b5948]">
                 Start research
-                <span className="mt-1 block text-xs text-[#d8d5ca]">
-                  {settings.researchMinutes} min
-                </span>
+                <span className="mt-1 block text-xs text-[#d8d5ca]">{settings.researchMinutes} min</span>
               </button>
             </div>
           )}
@@ -382,23 +369,14 @@ export default function Home() {
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-[#77776f]">Research in progress</p>
                 <h2 className="mt-2 font-serif text-2xl">{challenge.title}</h2>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-[#343a35]">
-                  {challenge.description}
-                </p>
-                <p className="mt-3 text-sm text-[#21483a]/75">
-                  Form a view, find evidence, and decide what matters most.
-                </p>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-[#343a35]">{challenge.description}</p>
+                <p className="mt-3 text-sm text-[#21483a]/75">Form a view, find evidence, and decide what matters most.</p>
               </div>
               <div className="min-w-44 bg-[#21483a] px-7 py-5 text-center text-[#faf9f6]">
                 <p className="text-xs uppercase tracking-[0.2em] text-[#d8d5ca]">Research time</p>
                 <p className="mt-2 font-serif text-4xl tabular-nums">{formatTime(secondsLeft)}</p>
                 {!settings.deepResearchOnly && (
-                  <button
-                    onClick={() => setPhase("ready")}
-                    className="mt-4 text-xs text-[#d8d5ca] underline"
-                  >
-                    Finish research early
-                  </button>
+                  <button onClick={() => setPhase("ready")} className="mt-4 text-xs text-[#d8d5ca] underline">Finish research early</button>
                 )}
               </div>
             </div>
@@ -410,16 +388,9 @@ export default function Home() {
               <h2 className="mt-2 font-serif text-3xl">{challenge.title}</h2>
               <p className="mt-4 text-sm text-[#343a35]">Research done.</p>
               <div className="my-6 border-y border-[#21483a]/20 py-5">
-                <p className="text-sm text-[#343a35]">
-                  Up next: {settings.speechMinutes} {settings.speechMinutes === 1 ? "min" : "mins"} to speak.
-                </p>
+                <p className="text-sm text-[#343a35]">Up next: {settings.speechMinutes} {settings.speechMinutes === 1 ? "min" : "mins"} to speak.</p>
               </div>
-              <button
-                onClick={startSpeaking}
-                className="bg-[#21483a] px-8 py-4 text-[#faf9f6] transition hover:bg-[#2b5948]"
-              >
-                I&apos;m ready to speak
-              </button>
+              <button onClick={startSpeaking} className="bg-[#21483a] px-8 py-4 text-[#faf9f6] transition hover:bg-[#2b5948]">I&apos;m ready to speak</button>
               <p className="mt-3 text-xs text-[#77776f]">Click to start the speaking timer.</p>
             </div>
           )}
@@ -428,16 +399,9 @@ export default function Home() {
             <div className="mx-auto max-w-xl py-3 text-center">
               <p className="text-xs uppercase tracking-[0.2em]">Speak your answer</p>
               <h2 className="mt-2 font-serif text-3xl">{challenge.title}</h2>
-              <p className="mt-3 text-sm text-[#343a35]">
-                Make your case. Explain your reasoning. State what would change your mind.
-              </p>
+              <p className="mt-3 text-sm text-[#343a35]">Make your case. Explain your reasoning. State what would change your mind.</p>
               <p className="my-6 font-serif text-6xl tabular-nums">{formatTime(secondsLeft)}</p>
-              <button
-                onClick={() => setPhase("finished")}
-                className="border border-[#21483a] px-6 py-3 text-sm hover:bg-[#21483a] hover:text-[#faf9f6]"
-              >
-                Finish speaking
-              </button>
+              <button onClick={() => setPhase("finished")} className="border border-[#21483a] px-6 py-3 text-sm hover:bg-[#21483a] hover:text-[#faf9f6]">Finish speaking</button>
             </div>
           )}
 
@@ -445,48 +409,25 @@ export default function Home() {
             <div className="mx-auto max-w-xl py-3 text-center">
               <p className="text-xs uppercase tracking-[0.2em]">Session complete</p>
               <h2 className="mt-2 font-serif text-3xl">{challenge.title}</h2>
-              <p className="mt-4 text-sm text-[#343a35]">
-                Reflect: what was your conclusion, and what evidence mattered most?
-              </p>
-              <button
-                onClick={resetChallenge}
-                className="mt-6 bg-[#21483a] px-7 py-4 text-[#faf9f6] hover:bg-[#2b5948]"
-              >
-                Draw another challenge
-              </button>
+              <p className="mt-4 text-sm text-[#343a35]">Reflect: what was your conclusion, and what evidence mattered most?</p>
+              <button onClick={drawCard} disabled={isShuffling || isDrawing} className="mt-6 bg-[#21483a] px-7 py-4 text-[#faf9f6] hover:bg-[#2b5948] disabled:opacity-60">Draw another challenge</button>
             </div>
           )}
         </section>
       )}
 
-      <p className="mt-10 text-center font-serif text-sm text-[#21483a]/70">
-        One challenge at a time. Think before you act.
-      </p>
+      <p className="mt-10 text-center font-serif text-sm text-[#21483a]/70">One challenge at a time. Think before you act.</p>
 
+      {/* SETTINGS */}
       {settingsOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-6 py-8"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSettingsOpen(false);
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="settings-title"
-            className="w-full max-w-lg bg-[#faf9f6] p-8 text-[#21483a] shadow-2xl"
-          >
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-6 py-8" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setSettingsOpen(false);
+        }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="settings-title" className="w-full max-w-lg bg-[#faf9f6] p-8 text-[#21483a] shadow-2xl">
             <div className="flex items-center justify-between">
               <h2 id="settings-title" className="font-serif text-3xl">Settings</h2>
-              <button
-                onClick={() => setSettingsOpen(false)}
-                aria-label="Close settings"
-                className="px-2 py-1 text-2xl leading-none hover:bg-[#dedddb]"
-              >
-                ×
-              </button>
+              <button onClick={() => setSettingsOpen(false)} aria-label="Close settings" className="px-2 py-1 text-2xl leading-none hover:bg-[#dedddb]">×</button>
             </div>
-
             <p className="mt-3 text-sm text-[#66685f]">Timer lengths in whole minutes.</p>
 
             <div className="mt-7 space-y-6">
@@ -496,25 +437,9 @@ export default function Home() {
                   <p className="mt-1 text-xs text-[#66685f]">Time to present your answer</p>
                 </div>
                 <div className="flex items-center gap-4">
-                  <button
-                    onClick={() => updateMinutes("speechMinutes", -1)}
-                    disabled={settings.speechMinutes <= 1}
-                    aria-label="Decrease speech timer"
-                    className="h-9 w-9 border border-[#21483a]/30 disabled:opacity-30"
-                  >
-                    −
-                  </button>
-                  <span className="w-16 text-center font-serif text-lg">
-                    {settings.speechMinutes} {settings.speechMinutes === 1 ? "min" : "mins"}
-                  </span>
-                  <button
-                    onClick={() => updateMinutes("speechMinutes", 1)}
-                    disabled={settings.speechMinutes >= 60}
-                    aria-label="Increase speech timer"
-                    className="h-9 w-9 border border-[#21483a]/30 disabled:opacity-30"
-                  >
-                    +
-                  </button>
+                  <button onClick={() => updateMinutes("speechMinutes", -1)} disabled={settings.speechMinutes <= 1} aria-label="Decrease speech timer" className="h-9 w-9 border border-[#21483a]/30 disabled:opacity-30">−</button>
+                  <span className="w-16 text-center font-serif text-lg">{settings.speechMinutes} {settings.speechMinutes === 1 ? "min" : "mins"}</span>
+                  <button onClick={() => updateMinutes("speechMinutes", 1)} disabled={settings.speechMinutes >= 60} aria-label="Increase speech timer" className="h-9 w-9 border border-[#21483a]/30 disabled:opacity-30">+</button>
                 </div>
               </div>
 
@@ -524,79 +449,201 @@ export default function Home() {
                   <p className="mt-1 text-xs text-[#66685f]">Time to think and research</p>
                 </div>
                 <div className="flex items-center gap-4">
-                  <button
-                    onClick={() => updateMinutes("researchMinutes", -1)}
-                    disabled={settings.researchMinutes <= 1}
-                    aria-label="Decrease research timer"
-                    className="h-9 w-9 border border-[#21483a]/30 disabled:opacity-30"
-                  >
-                    −
-                  </button>
-                  <span className="w-16 text-center font-serif text-lg">
-                    {settings.researchMinutes} {settings.researchMinutes === 1 ? "min" : "mins"}
-                  </span>
-                  <button
-                    onClick={() => updateMinutes("researchMinutes", 1)}
-                    disabled={settings.researchMinutes >= 60}
-                    aria-label="Increase research timer"
-                    className="h-9 w-9 border border-[#21483a]/30 disabled:opacity-30"
-                  >
-                    +
-                  </button>
+                  <button onClick={() => updateMinutes("researchMinutes", -1)} disabled={settings.researchMinutes <= 1} aria-label="Decrease research timer" className="h-9 w-9 border border-[#21483a]/30 disabled:opacity-30">−</button>
+                  <span className="w-16 text-center font-serif text-lg">{settings.researchMinutes} {settings.researchMinutes === 1 ? "min" : "mins"}</span>
+                  <button onClick={() => updateMinutes("researchMinutes", 1)} disabled={settings.researchMinutes >= 60} aria-label="Increase research timer" className="h-9 w-9 border border-[#21483a]/30 disabled:opacity-30">+</button>
                 </div>
               </div>
 
               <label className="flex cursor-pointer items-start justify-between gap-6">
                 <span>
                   <span className="block font-medium">Deep research only</span>
-                  <span className="mt-1 block text-xs text-[#66685f]">
-                    Keep the full research timer and hide the early-finish option.
-                  </span>
+                  <span className="mt-1 block text-xs text-[#66685f]">Keep the full research timer and hide the early-finish option.</span>
                 </span>
-                <input
-                  type="checkbox"
-                  checked={settings.deepResearchOnly}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      deepResearchOnly: event.target.checked,
-                    }))
-                  }
-                  className="mt-1 h-5 w-5 accent-[#21483a]"
-                />
+                <input type="checkbox" checked={settings.deepResearchOnly} onChange={(event) => setSettings((current) => ({ ...current, deepResearchOnly: event.target.checked }))} className="mt-1 h-5 w-5 accent-[#21483a]" />
               </label>
 
               <label className="flex cursor-pointer items-start justify-between gap-6">
                 <span>
                   <span className="block font-medium">Mute sound effects</span>
-                  <span className="mt-1 block text-xs text-[#66685f]">
-                    Silence the optional timer sound.
-                  </span>
+                  <span className="mt-1 block text-xs text-[#66685f]">Silence the optional timer sound.</span>
                 </span>
-                <input
-                  type="checkbox"
-                  checked={settings.muteSoundEffects}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      muteSoundEffects: event.target.checked,
-                    }))
-                  }
-                  className="mt-1 h-5 w-5 accent-[#21483a]"
-                />
+                <input type="checkbox" checked={settings.muteSoundEffects} onChange={(event) => setSettings((current) => ({ ...current, muteSoundEffects: event.target.checked }))} className="mt-1 h-5 w-5 accent-[#21483a]" />
               </label>
             </div>
 
             <p className="mt-6 text-xs text-[#66685f]">Settings are saved in this browser.</p>
-            <button
-              onClick={() => setSettingsOpen(false)}
-              className="mt-5 w-full bg-[#21483a] px-6 py-4 font-medium text-[#faf9f6] transition hover:bg-[#2b5948]"
-            >
-              Done
-            </button>
+            <button onClick={() => setSettingsOpen(false)} className="mt-5 w-full bg-[#21483a] px-6 py-4 font-medium text-[#faf9f6] transition hover:bg-[#2b5948]">Done</button>
           </section>
         </div>
       )}
+
+      <style jsx>{`
+        .card-table {
+          perspective: 1200px;
+          isolation: isolate;
+        }
+
+        .deck-half {
+          position: absolute;
+          width: 104px;
+          height: 148px;
+          transform-style: preserve-3d;
+        }
+
+        .deck-left {
+          transform: translateX(-42px) rotate(-7deg);
+        }
+
+        .deck-right {
+          transform: translateX(42px) rotate(7deg);
+        }
+
+        .playing-card {
+          position: absolute;
+          inset: 0;
+          border-radius: 10px;
+          border: 1px solid #d8d5ca;
+          background: #21483a;
+          box-shadow: 0 5px 12px rgba(25, 40, 30, 0.18);
+          overflow: hidden;
+          transform-origin: center bottom;
+          backface-visibility: hidden;
+        }
+
+        .card-left:nth-child(1) { transform: translate(-3px, 2px) rotate(-3deg); }
+        .card-left:nth-child(2) { transform: translate(-2px, 1px) rotate(-2deg); }
+        .card-left:nth-child(3) { transform: translate(-1px, 0) rotate(-1deg); }
+        .card-left:nth-child(4) { transform: translate(0, -1px); }
+        .card-left:nth-child(5) { transform: translate(1px, -2px) rotate(1deg); }
+        .card-left:nth-child(6) { transform: translate(2px, -3px) rotate(2deg); }
+        .card-left:nth-child(7) { transform: translate(3px, -4px) rotate(3deg); }
+
+        .card-right:nth-child(1) { transform: translate(3px, 2px) rotate(3deg); }
+        .card-right:nth-child(2) { transform: translate(2px, 1px) rotate(2deg); }
+        .card-right:nth-child(3) { transform: translate(1px, 0) rotate(1deg); }
+        .card-right:nth-child(4) { transform: translate(0, -1px); }
+        .card-right:nth-child(5) { transform: translate(-1px, -2px) rotate(-1deg); }
+        .card-right:nth-child(6) { transform: translate(-2px, -3px) rotate(-2deg); }
+        .card-right:nth-child(7) { transform: translate(-3px, -4px) rotate(-3deg); }
+
+        .is-shuffling .deck-left {
+          animation: left-cut 1.9s ease-in-out both;
+        }
+
+        .is-shuffling .deck-right {
+          animation: right-cut 1.9s ease-in-out both;
+        }
+
+        .is-shuffling .card-left:nth-child(1) { animation: left-riffle 1.1s 0.45s ease-in-out both; }
+        .is-shuffling .card-left:nth-child(2) { animation: left-riffle 1.1s 0.52s ease-in-out both; }
+        .is-shuffling .card-left:nth-child(3) { animation: left-riffle 1.1s 0.59s ease-in-out both; }
+        .is-shuffling .card-left:nth-child(4) { animation: left-riffle 1.1s 0.66s ease-in-out both; }
+        .is-shuffling .card-left:nth-child(5) { animation: left-riffle 1.1s 0.73s ease-in-out both; }
+        .is-shuffling .card-left:nth-child(6) { animation: left-riffle 1.1s 0.80s ease-in-out both; }
+        .is-shuffling .card-left:nth-child(7) { animation: left-riffle 1.1s 0.87s ease-in-out both; }
+
+        .is-shuffling .card-right:nth-child(1) { animation: right-riffle 1.1s 0.48s ease-in-out both; }
+        .is-shuffling .card-right:nth-child(2) { animation: right-riffle 1.1s 0.55s ease-in-out both; }
+        .is-shuffling .card-right:nth-child(3) { animation: right-riffle 1.1s 0.62s ease-in-out both; }
+        .is-shuffling .card-right:nth-child(4) { animation: right-riffle 1.1s 0.69s ease-in-out both; }
+        .is-shuffling .card-right:nth-child(5) { animation: right-riffle 1.1s 0.76s ease-in-out both; }
+        .is-shuffling .card-right:nth-child(6) { animation: right-riffle 1.1s 0.83s ease-in-out both; }
+        .is-shuffling .card-right:nth-child(7) { animation: right-riffle 1.1s 0.90s ease-in-out both; }
+
+        @keyframes left-cut {
+          0%, 15% { transform: translateX(-42px) rotate(-7deg); }
+          35%, 65% { transform: translateX(-100px) translateY(-12px) rotate(-13deg); }
+          82%, 100% { transform: translateX(-42px) rotate(-7deg); }
+        }
+
+        @keyframes right-cut {
+          0%, 15% { transform: translateX(42px) rotate(7deg); }
+          35%, 65% { transform: translateX(100px) translateY(-12px) rotate(13deg); }
+          82%, 100% { transform: translateX(42px) rotate(7deg); }
+        }
+
+        @keyframes left-riffle {
+          0%, 25% { translate: 0 0; }
+          50% { translate: 30px -24px; }
+          72% { translate: 46px 8px; }
+          100% { translate: 0 0; }
+        }
+
+        @keyframes right-riffle {
+          0%, 25% { translate: 0 0; }
+          50% { translate: -30px -24px; }
+          72% { translate: -46px 8px; }
+          100% { translate: 0 0; }
+        }
+
+        .drawn-card {
+          width: 176px;
+          height: 250px;
+          perspective: 1000px;
+          animation: draw-out 0.65s cubic-bezier(.2,.8,.2,1) both;
+        }
+
+        .drawn-card-inner {
+          width: 100%;
+          height: 100%;
+          transform-style: preserve-3d;
+          animation: card-flip 0.65s 0.12s cubic-bezier(.2,.7,.2,1) both;
+        }
+
+        .drawn-card-front {
+          display: flex;
+          width: 100%;
+          height: 100%;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid #d8d5ca;
+          border-radius: 12px;
+          background: #21483a;
+          padding: 22px;
+          text-align: center;
+          color: #faf9f6;
+          box-shadow: 0 18px 35px rgba(25, 40, 30, 0.22);
+          backface-visibility: hidden;
+        }
+
+        @keyframes draw-out {
+          from { opacity: 0; transform: translateY(38px) scale(.92); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        @keyframes card-flip {
+          from { transform: rotateY(90deg); }
+          to { transform: rotateY(0deg); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .is-shuffling .deck-left,
+          .is-shuffling .deck-right,
+          .is-shuffling .playing-card,
+          .drawn-card,
+          .drawn-card-inner {
+            animation-duration: 0.01ms !important;
+            animation-delay: 0ms !important;
+          }
+        }
+      `}</style>
     </main>
+  );
+}
+
+function CardBack() {
+  return (
+    <div className="flex h-full w-full items-center justify-center p-2">
+      <div className="flex h-full w-full flex-col items-center justify-center rounded-md border border-[#d8d5ca]/60">
+        <div className="flex h-11 w-11 items-center justify-center rounded-full border border-[#d8d5ca]">
+          <span className="h-3 w-3 rounded-full bg-[#d8d5ca]" />
+        </div>
+        <span className="absolute bottom-5 font-serif text-[9px] tracking-[0.16em] text-[#d8d5ca]">
+          THE MBA SCHOOL
+        </span>
+      </div>
+    </div>
   );
 }
